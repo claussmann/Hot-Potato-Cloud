@@ -1,4 +1,4 @@
-use std::net::{TcpListener, TcpStream, SocketAddr, Shutdown};
+use std::net::{TcpListener, TcpStream, Shutdown, IpAddr};
 use std::io::{prelude::*, BufReader};
 use std::time::{Duration, SystemTime};
 
@@ -12,48 +12,56 @@ struct File {
     replicas_sent: u8,
 }
 
+struct Peer {
+    addr: IpAddr,
+    last_seen: SystemTime,
+}
 
-fn main() {
+
+fn main(){
     let listener = TcpListener::bind(ADDR).unwrap();
-    let mut peers: Vec<SocketAddr> = Vec::new();
+    let mut peers: Vec<Peer> = Vec::new();
     let mut files: Vec<File> = Vec::new();
 
     for stream in listener.incoming() {
         let stream = stream.unwrap();
+        register_peer_addr(&stream, &mut peers);
         let mut req_type = [0;1];
         let _ = stream.peek(&mut req_type).unwrap();
         match req_type[0] {
-            b'p' => accept_new_peer(stream, &mut peers),
-            b'd' => accept_data(stream, &mut files),
+            b'p' => welcome_new_peer(stream, &peers),
+            b'd' => receive_data(stream, &mut files),
             _ => stream.shutdown(Shutdown::Both).unwrap(),
         };
     }
 }
 
-fn accept_new_peer(mut stream: TcpStream, peers: &mut Vec<SocketAddr>){
-    let peer = stream.peer_addr().unwrap();
-
-    for x in peers.iter() {
-        stream.write(format!("{}:{} ", x.ip(), x.port()).as_bytes()).unwrap();
-    }
-
-    stream.shutdown(Shutdown::Both).unwrap();
-
-    let mut known = false;
-    for other in peers.iter() {
-        if peer.ip() == other.ip() && peer.port() == other.port() {
-            known = true;
-            break;
+fn register_peer_addr(stream: &TcpStream, peers: &mut Vec<Peer>){
+    let peer_addr = stream.peer_addr().unwrap().ip();
+    for other in peers.iter_mut() {
+        if peer_addr == other.addr {
+            other.last_seen = SystemTime::now();
+            return ();
         }
     }
-    if !known {
-        peers.push(peer);
-    }
-
+    let peer = Peer {
+        addr: peer_addr,
+        last_seen: SystemTime::now(),
+    };
+    peers.push(peer);
     return ()
 }
 
-fn accept_data(mut stream: TcpStream, files: &mut Vec<File>){
+fn welcome_new_peer(mut stream: TcpStream, peers: &Vec<Peer>){
+    for x in peers.iter() {
+        stream.write(format!("{} ", x.addr).as_bytes()).unwrap();
+    }
+    stream.write("\n".as_bytes()).unwrap();
+    stream.shutdown(Shutdown::Both).unwrap();
+    return ()
+}
+
+fn receive_data(mut stream: TcpStream, files: &mut Vec<File>){
     let mut br = BufReader::new(&mut stream);
     let mut f = File{
         data: String::new(),
