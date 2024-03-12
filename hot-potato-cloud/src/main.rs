@@ -1,8 +1,9 @@
-use std::net::{TcpListener, TcpStream, Shutdown, IpAddr};
+use std::net::{TcpListener, TcpStream, SocketAddr, Shutdown, IpAddr, Ipv4Addr};
 use std::io::{prelude::*, BufReader};
 use std::time::{Duration, SystemTime};
 
-const ADDR: &'static str = "127.0.0.1:27491";
+const ADDR: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+const PORT: u16 = 27491;
 const MAX_REPLICATION: u8 = 1;
 
 
@@ -19,7 +20,7 @@ struct Peer {
 
 
 fn main(){
-    let listener = TcpListener::bind(ADDR).unwrap();
+    let listener = TcpListener::bind(SocketAddr::new(ADDR, PORT)).unwrap();
     let mut peers: Vec<Peer> = Vec::new();
     let mut files: Vec<File> = Vec::new();
 
