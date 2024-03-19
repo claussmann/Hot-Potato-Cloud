@@ -4,9 +4,10 @@ use std::time::{Duration, SystemTime};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use rand::Rng;
+use std::env;
 
-const ADDR: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
-const PORT: u16 = 27491;
+
+
 const MAX_REPLICATION: u8 = 1;
 
 
@@ -17,7 +18,7 @@ struct File {
 }
 
 struct Peer {
-    addr: IpAddr,
+    addr: SocketAddr,
     last_seen: SystemTime,
 }
 
@@ -25,13 +26,21 @@ struct Peer {
 fn main(){
     let mut peers: Vec<Peer> = Vec::new();
     let mut files: Vec<File> = Vec::new();
+    let mut listen_addr = None;
+
+    let args: Vec<String> = env::args().collect();
+    if args.len() > 1 {
+        let first_peer = args[1].clone();
+        listen_addr = join_network(&first_peer, &mut peers);
+    }
+
     let peers_arc = Arc::new(Mutex::new(peers));
     let files_arc = Arc::new(Mutex::new(files));
 
     let peers_mutex1 = Arc::clone(&peers_arc);
     let files_mutex1 = Arc::clone(&files_arc);
     let recv_deam = thread::spawn(move || {
-        receiver_deamon(peers_mutex1, files_mutex1)
+        receiver_deamon(listen_addr, peers_mutex1, files_mutex1)
     });
     let peers_mutex2 = Arc::clone(&peers_arc);
     let files_mutex2 = Arc::clone(&files_arc);
@@ -43,8 +52,12 @@ fn main(){
     dist_deam.join().unwrap();
 }
 
-fn receiver_deamon(peers: Arc<Mutex<Vec<Peer>>>, files: Arc<Mutex<Vec<File>>>){
-    let listener = TcpListener::bind(SocketAddr::new(ADDR, PORT)).unwrap();
+fn receiver_deamon(listen_addr: Option<SocketAddr>, peers: Arc<Mutex<Vec<Peer>>>, files: Arc<Mutex<Vec<File>>>){
+    let listener = match listen_addr {
+        Some(x) => TcpListener::bind(x).unwrap(),
+        None => TcpListener::bind("127.0.0.1:26001").unwrap(),
+    };
+    println!("Running on {}", listener.local_addr().unwrap());
 
     for stream in listener.incoming() {
         let stream = stream.unwrap();
@@ -80,8 +93,7 @@ fn distribution_deamon(peers_arc: Arc<Mutex<Vec<Peer>>>, files_arc: Arc<Mutex<Ve
                 oldest = i;
             }
         }
-        let peer_addr = SocketAddr::new(peers[oldest].addr, PORT);
-        if let Ok(mut stream) = TcpStream::connect_timeout(&peer_addr, Duration::from_secs(10)){
+        if let Ok(mut stream) = TcpStream::connect_timeout(&peers[oldest].addr, Duration::from_secs(10)){
             stream.set_write_timeout(Some(Duration::from_secs(30))).unwrap();
             let rn = rng.gen_range(0..files.len());
             let string_to_send = format!("d{}\n", files[rn].data);
@@ -113,7 +125,7 @@ fn distribution_deamon(peers_arc: Arc<Mutex<Vec<Peer>>>, files_arc: Arc<Mutex<Ve
 }
 
 fn register_peer_addr(stream: &TcpStream, peers: &mut Vec<Peer>){
-    let peer_addr = stream.peer_addr().unwrap().ip();
+    let peer_addr = stream.peer_addr().unwrap();
     for other in peers.iter_mut() {
         if peer_addr == other.addr {
             other.last_seen = SystemTime::now();
@@ -135,6 +147,21 @@ fn welcome_new_peer(mut stream: TcpStream, peers: &Vec<Peer>){
     stream.write("\n".as_bytes()).unwrap();
     stream.shutdown(Shutdown::Both).unwrap();
     return ()
+}
+
+fn join_network(first_peer: &str, peers: &mut Vec<Peer>) -> Option<SocketAddr> {
+    if let Ok(mut stream) = TcpStream::connect(first_peer){
+        stream.set_write_timeout(Some(Duration::from_secs(30))).unwrap();
+        stream.write("p".as_bytes()).unwrap();
+        let mut br = BufReader::new(&mut stream);
+        let mut response = String::new();
+        let _ = br.read_line(&mut response).unwrap();
+        println!("INFO: Joined peer to peer net.");
+        // TODO: Receive peer addresses.
+        return Some(stream.local_addr().unwrap());
+    }
+    println!("WARN: Failed to join peer to peer network.");
+    return None;
 }
 
 fn receive_data(mut stream: TcpStream, files: &mut Vec<File>){
