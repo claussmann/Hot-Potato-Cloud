@@ -3,6 +3,7 @@ use std::io::{prelude::*, BufReader};
 use std::time::{Duration, SystemTime};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use rand::Rng;
 
 const ADDR: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 const PORT: u16 = 27491;
@@ -58,10 +59,56 @@ fn receiver_deamon(peers: Arc<Mutex<Vec<Peer>>>, files: Arc<Mutex<Vec<File>>>){
     }
 }
 
-fn distribution_deamon(peers: Arc<Mutex<Vec<Peer>>>, files: Arc<Mutex<Vec<File>>>){
-    while true {
-        thread::sleep(Duration::from_secs(2));
-        println!("To be implemented: Forward files now.");
+fn distribution_deamon(peers_arc: Arc<Mutex<Vec<Peer>>>, files_arc: Arc<Mutex<Vec<File>>>){
+    let mut rng = rand::thread_rng();
+    loop {
+        thread::sleep(Duration::from_secs(5));
+        let mut peers = peers_arc.lock().unwrap();
+        let mut files = files_arc.lock().unwrap();
+        if peers.len() == 0 {
+            println!("WARNING: I am lonely; No peers are known.");
+            continue;
+        }
+        if files.len() == 0 {
+            println!("WARNING: No files known.");
+            continue;
+        }
+        let max_last_seen = 0;
+        let mut oldest = 0;
+        for i in 0..peers.len() {
+            if peers[i].last_seen.elapsed().unwrap().as_millis() >= max_last_seen {
+                oldest = i;
+            }
+        }
+        let peer_addr = SocketAddr::new(peers[oldest].addr, PORT);
+        if let Ok(mut stream) = TcpStream::connect_timeout(&peer_addr, Duration::from_secs(10)){
+            stream.set_write_timeout(Some(Duration::from_secs(30))).unwrap();
+            let rn = rng.gen_range(0..files.len());
+            let string_to_send = format!("d{}\n", files[rn].data);
+            if let Ok(sent) = stream.write(string_to_send.as_bytes()) {
+                let mut br = BufReader::new(&mut stream);
+                let mut response = String::new();
+                let _ = br.read_line(&mut response).unwrap();
+                if response == "OK" {
+                    files[rn].replicas_sent += 1;
+                    if files[rn].replicas_sent > MAX_REPLICATION {
+                        println!("INFO: A file is removed due to max replicas reached.");
+                        files.remove(rn);
+                    }
+                }
+                else if response == "KNOWN" {
+                    files[rn].last_seen = SystemTime::now();
+                }
+            }
+            else {
+                println!("INFO: A peer disconnected.");
+                peers.remove(oldest);
+            }
+        }
+        else {
+            println!("INFO: A peer disconnected.");
+            peers.remove(oldest);
+        }
     }
 }
 
