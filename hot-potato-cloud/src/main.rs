@@ -1,6 +1,8 @@
 use std::net::{TcpListener, TcpStream, SocketAddr, Shutdown, IpAddr, Ipv4Addr};
 use std::io::{prelude::*, BufReader};
 use std::time::{Duration, SystemTime};
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 const ADDR: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 const PORT: u16 = 27491;
@@ -20,20 +22,46 @@ struct Peer {
 
 
 fn main(){
-    let listener = TcpListener::bind(SocketAddr::new(ADDR, PORT)).unwrap();
     let mut peers: Vec<Peer> = Vec::new();
     let mut files: Vec<File> = Vec::new();
+    let peers_arc = Arc::new(Mutex::new(peers));
+    let files_arc = Arc::new(Mutex::new(files));
+
+    let peers_mutex1 = Arc::clone(&peers_arc);
+    let files_mutex1 = Arc::clone(&files_arc);
+    let recv_deam = thread::spawn(move || {
+        receiver_deamon(peers_mutex1, files_mutex1)
+    });
+    let peers_mutex2 = Arc::clone(&peers_arc);
+    let files_mutex2 = Arc::clone(&files_arc);
+    let dist_deam = thread::spawn(move || {
+        distribution_deamon(peers_mutex2, files_mutex2)
+    });
+
+    recv_deam.join().unwrap();
+    dist_deam.join().unwrap();
+}
+
+fn receiver_deamon(peers: Arc<Mutex<Vec<Peer>>>, files: Arc<Mutex<Vec<File>>>){
+    let listener = TcpListener::bind(SocketAddr::new(ADDR, PORT)).unwrap();
 
     for stream in listener.incoming() {
         let stream = stream.unwrap();
-        register_peer_addr(&stream, &mut peers);
+        register_peer_addr(&stream, &mut peers.lock().unwrap());
         let mut req_type = [0;1];
         let _ = stream.peek(&mut req_type).unwrap();
         match req_type[0] {
-            b'p' => welcome_new_peer(stream, &peers),
-            b'd' => receive_data(stream, &mut files),
+            b'p' => welcome_new_peer(stream, &peers.lock().unwrap()),
+            b'd' => receive_data(stream, &mut files.lock().unwrap()),
             _ => stream.shutdown(Shutdown::Both).unwrap(),
         };
+    }
+}
+
+fn distribution_deamon(peers: Arc<Mutex<Vec<Peer>>>, files: Arc<Mutex<Vec<File>>>){
+    while true {
+        thread::sleep(Duration::from_secs(2));
+        println!("To be implemented: Forward files now.");
     }
 }
 
